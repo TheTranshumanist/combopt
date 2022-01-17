@@ -1,6 +1,7 @@
 from graph import Graph
 from src.classes import Solution
 from typing import List, Dict
+from time import perf_counter
 import random
 
 
@@ -13,7 +14,6 @@ class Ant:
     trail: List[int]
     visited: List[bool]
     trail_length: float
-    pheromone_change: Dict[int, Dict[int, float]]
 
     def __init__(self, g: Graph) -> None:
         start = random.randint(1, g.dimension)
@@ -21,8 +21,6 @@ class Ant:
         self.visited = [False] * (g.dimension + 1)
         self.visited[start] = True
         self.trail_length = 0
-        self.pheromone_change = {i: {j: 0 for j in range(
-            1, g.dimension + 1) if j != i} for i in range(1, g.dimension + 1)}
 
     def visit_vertex(self, vertex: int, g: Graph) -> None:
         self.trail_length += g.distances[self.trail[-1]][vertex]
@@ -32,13 +30,6 @@ class Ant:
     def get_length(self, g: Graph) -> float:
         return self.trail_length + g.distances[self.trail[-1]][self.trail[0]]
 
-    def calc_pheromone_change(self, q: int) -> None:
-        for index in range(len(self.trail) - 1):
-            i = self.trail[index]
-            j = self.trail[index + 1]
-            self.pheromone_change[i][j] = q / self.trail_length
-            self.pheromone_change[j][i] = q / self.trail_length
-
 
 class AntSystemSolution(Solution):
 
@@ -47,13 +38,14 @@ class AntSystemSolution(Solution):
     for Travelling Salesman Problem
     """
 
-    q: int = 71
-    alpha: float = 7.95
-    beta: float = 19.54
-    rho: float = 0.87
+    q0: float = 0.9
+    alpha: float = 1
+    beta: float = 5
+    rho: float = 0.1
+    phi: float = 0.1
     iterations: int = 10000
-    ant_count: int = 200
-    init_pheromone: float = 1e-4
+    ant_count: int = 10
+    init_pheromone: float = 1e-6
 
     ants: List[Ant]
     pheromone: Dict[int, Dict[int, float]]
@@ -68,11 +60,15 @@ class AntSystemSolution(Solution):
         self.distance = float('inf')
         self.graph = g
         self.set_pheromone()
+        start = perf_counter()
         for i in range(self.iterations):
+            end = perf_counter()
+            if end - start > 300:
+                break
             self.setup_ants()
             self.move_ants()
-            self.update_pheromone()
             self.update_solution()
+            self.update_pheromone_global()
             print(f'{i + 1} iteration | Best trail length -> {self.distance}')
 
     def setup_ants(self) -> None:
@@ -83,14 +79,22 @@ class AntSystemSolution(Solution):
             for i in range(self.graph.dimension - 1):
                 target = self.select_next(ant)
                 ant.visit_vertex(target, self.graph)
+                self.update_pheromone_local(ant)
 
     def select_next(self, ant: Ant) -> int:
-        probabilities = self.calc_probabilities(ant)
-        random_value = random.random()
-        for vertex, probability in enumerate(probabilities):
-            random_value -= probability
-            if random_value <= 0:
-                return vertex
+        q = random.uniform(0, 1)
+        if q > self.q0:
+            probabilities = self.calc_probabilities(ant)
+            random_value = random.random()
+            for vertex, probability in enumerate(probabilities):
+                random_value -= probability
+                if random_value <= 0:
+                    return vertex
+        else:
+            probabilities = self.calc_argmax(ant)
+            vertex = max(range(len(probabilities)),
+                         key=lambda i: probabilities[i])
+            return vertex
 
     def calc_probabilities(self, ant: Ant) -> List[float]:
         cur = ant.trail[-1]
@@ -99,25 +103,42 @@ class AntSystemSolution(Solution):
             if not ant.visited[i]:
                 denominator += self.pheromone[cur][i]**self.alpha * \
                     (1 / self.graph.distances[cur][i])**self.beta
-        probabilities = [0] * (self.graph.dimension + 1)
+        arr = [0] * (self.graph.dimension + 1)
         for i in range(1, self.graph.dimension + 1):
             if not ant.visited[i]:
                 p = self.pheromone[cur][i]**self.alpha * \
                     (1 / self.graph.distances[cur][i])**self.beta
-                probabilities[i] = p / denominator
-        return probabilities
+                arr[i] = p / denominator
+        return arr
 
-    def update_pheromone(self) -> None:
+    def calc_argmax(self, ant: Ant) -> List[float]:
+        cur = ant.trail[-1]
+        arr = [0] * (self.graph.dimension + 1)
+        for i in range(1, self.graph.dimension + 1):
+            if not ant.visited[i]:
+                arr[i] = self.pheromone[cur][i] * \
+                    (1 / self.graph.distances[cur][i])**self.beta
+        return arr
+
+    def update_pheromone_local(self, ant: Ant) -> None:
+        i = ant.trail[-2]
+        j = ant.trail[-1]
+        self.pheromone[i][j] *= (1 - self.phi)
+        self.pheromone[i][j] += self.phi * self.init_pheromone
+        self.pheromone[j][i] = self.pheromone[i][j]
+
+    def update_pheromone_global(self) -> None:
         for i in range(1, self.graph.dimension + 1):
             for j in range(i + 1, self.graph.dimension + 1):
-                contributions = sum([ant.pheromone_change[i][j]
-                                     for ant in self.ants])
                 if self.pheromone[i][j] * (1 - self.rho) < 1e-32:
                     self.pheromone[i][j] = 1e-32
                 else:
                     self.pheromone[i][j] *= (1 - self.rho)
-                self.pheromone[i][j] += contributions
-                self.pheromone[j][i] = self.pheromone[i][j]
+        for index in range(len(self.route) - 1):
+            i = self.route[index]
+            j = self.route[index + 1]
+            self.pheromone[i][j] += self.rho * (1 / self.distance)
+            self.pheromone[j][i] = self.pheromone[i][j]
 
     def update_solution(self):
         for ant in self.ants:

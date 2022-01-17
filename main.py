@@ -60,8 +60,8 @@ def save_result(file_name: str, s: Solution) -> None:
 
 
 def main() -> None:
-    src_name = './instances/berlin52.txt'
-    dest_name = './results/aco_berlin.txt'
+    src_name = './instances/bier127.txt'
+    dest_name = './results/aco_bier.txt'
     solution_type = SolutionType.ACO
     finder_type = FinderType.DEFAULT
     start = 1
